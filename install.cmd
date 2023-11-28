@@ -58,6 +58,14 @@ if "%mosh%"=="1" set "mosh=1.3.2"
 if defined mosh set "moshFile=mosh-%mosh%.tar.gz"
 if defined mosh set "moshUri=https://mosh.org/%moshFile%"
 
+if defined tmux set "tmux=yes"
+if defined tmux set "tmuxFile=tmux.conf.tar.gz"
+if defined tmux set "tmuxUri=https://github.com/serguey/photon-wsl/raw/main/%moshFile%"
+
+if defined powerline set "powerline=1.24"
+if defined powerline set "powerlineFile=powerline-go-linux-amd64"
+if defined powerline set "powerlineUri=https://github.com/justjanne/powerline-go/releases/download/v1.24/%powerlineFile%"
+
 set "wsl=wsl -d %wslImage% -u root --cd ~ -- "
 
 echo.
@@ -67,6 +75,8 @@ echo.%ESC%[20G%ESC%[1;34mImage:%ESC%[1;33m %wslImage%%ESC%[0;39m
 echo.%ESC%[20G%ESC%[1;34mLocation:%ESC%[1;33m %wslLocation%%ESC%[0;39m
 echo.%ESC%[20G%ESC%[1;34mInstall docker:%ESC%[1;33m %docker%%ESC%[0;39m
 echo.%ESC%[20G%ESC%[1;34mInstall mosh:%ESC%[1;33m %mosh%%ESC%[0;39m
+echo.%ESC%[20G%ESC%[1;34mInstall tmux:%ESC%[1;33m %tmux%%ESC%[0;39m
+echo.%ESC%[20G%ESC%[1;34mInstall powerline:%ESC%[1;33m %powerline%%ESC%[0;39m
 echo.
 
 call :isImageInstalled
@@ -219,12 +229,16 @@ call :removePackage "%%k"
 
 call :startlog "Installing security updates"
 (
-    %wsl% /bin/bash -c "tdnf -q -y update $(tdnf updateinfo --list --updates | sed -r 's/.*\s(\S+)\.rpm$/\1/' | xargs echo) >/dev/null 2>/dev/null"
-) >nul 2>nul
+    %wsl% /bin/bash -c "tdnf -q -y update $(tdnf updateinfo --list --updates | sed -r -e 's/.*\s(\S+)\.rpm$/\1/' -e '/0 updates/s/^.*$/tdnf/' | xargs echo)"
+) 
+::>nul 2>nul
 call :endlog
 call :status "Security updates installed"
 
+:: mosh
 if defined mosh (
+
+:: save package list to restore later
 call :caption "Saving packages list"
 >mosh.tmp (
     %wsl% tdnf list --installed 2^>/dev/null ^| cut -f1 -d' '
@@ -232,15 +246,17 @@ call :caption "Saving packages list"
 call :status
 
 :: mosh compile packages
-for %%k in (build-essential createrepo libevent-devel ncurses-devel openssl-devel zlib-devel) do ^
+for %%k in (tar curl build-essential createrepo libevent-devel ncurses-devel openssl-devel zlib-devel) do ^
 call :installPackage "%%k"
 
+:: save new list to differ later
 call :caption "Saving new packages list"
 >mosh.compile.tmp (
     %wsl% tdnf list --installed 2^>/dev/null ^| cut -f1 -d' '
 ) 2>nul
 call :status
 
+:: download
 call :startlog "Downloading mosh sources"
 (
     %wsl% ^
@@ -250,6 +266,7 @@ call :startlog "Downloading mosh sources"
 call :endlog
 call :status "Mosh sources downloaded"
 
+:: compile mosh
 call :startlog "Compiling mosh binaries"
 (
     %wsl% ^
@@ -263,6 +280,7 @@ call :startlog "Compiling mosh binaries"
 call :endlog
 call :status "Mosh binaries compiled"
 
+:: check binaries installed
 call :caption "Mosh binaries installed"
 (
     %wsl% ^
@@ -272,9 +290,11 @@ call :caption "Mosh binaries installed"
 ) >nul 2>nul
 call :status
 
+:: remove packages for compiling
 for /f "usebackq delims=. tokens=1" %%k in (`findstr /V /G:mosh.tmp mosh.compile.tmp`) do ^
 call :removePackage "%%k"
 
+:: delete folders and temp files
 call :caption "Clean up after compile"
 (
     del /f /q mosh.tmp mosh.compile.tmp && %wsl% rm -rf mosh-^*
@@ -283,7 +303,47 @@ call :status
 
 )
 
+::tmux
+if defined tmux (
+
+:: tmux packages
+for %%k in (tmux xz awk tar) do ^
+call :installPackage "%%k"
+
+call :caption "Install tmux configuration"
+(
+    %wsl% ^
+    cd /etc ^&^& ^
+    curl -L %tmuxUri% --output /etc/%tmuxFile% ^&^& ^
+    tar xvzf %tmuxFile% ^&^& ^
+    rm -f %tmuxFile%
+) >nul 2>nul
+call :status
+
+call :caption "Configuring tmux startup"
+(
+    %wsl% /bin/bash -c "sed -i -r -e '/tmux/s/# //g' /startup.sh"
+) >nul 2>nul
+call :status
+
+)
+
+::precompiled powerline-go
+if defined powerline (
+
+call :caption "Install precompiled powerline-go"
+(
+    %wsl% ^
+    curl -L %powerlineUri% --output /usr/bin/powerline-go ^&^& ^
+    chmod +x /usr/bin/powerline-go
+) >nul 2>nul
+call :status
+
+)
+
+:: docker
 if defined docker (
+
 :: docker pre packages
 for %%k in (iptables xz awk tar) do ^
 call :installPackage "%%k"
@@ -312,6 +372,18 @@ call :caption "Configuring docker daemon"
     dos2unix /etc/docker/daemon.json ^>/dev/null 2^>/dev/null ^&^& ^
     chown root:root /etc/docker/daemon.json ^&^& ^
     chmod u+rw,g+r /etc/docker/daemon.json
+) >nul 2>nul
+call :status
+
+call :caption "Configuring iptables startup"
+(
+    %wsl% /bin/bash -c "sed -i -r -e '/iptables/s/# //g' /startup.sh"
+) >nul 2>nul
+call :status
+
+call :caption "Configuring docker startup"
+(
+    %wsl% /bin/bash -c "sed -i -r -e '/dockerd/s/# //g' /startup.sh"
 ) >nul 2>nul
 call :status
 
@@ -424,6 +496,7 @@ if not defined docker set "docker=0"
 if "%docker%"=="0" set "docker="
 if not defined mosh set "mosh=0"
 if "%mosh%"=="0" set "mosh="
+if defined mosh set "tmux=1"
 if not defined tmux set "tmux=0"
 if "%tmux%"=="0" set "tmux="
 if not defined powerline set "powerline=0"
@@ -603,7 +676,9 @@ if [ "$color_prompt" = yes ]; then
 PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ \[\e[0m\]'
 
 else
-    PS1='\[\e[1;31m\]\u@\h [ \[\e[0m\]\w\[\e[1;31m\] ]# \[\e[0m\]'
+
+PS1='\[\e[1;31m\]\u@\h [ \[\e[0m\]\w\[\e[1;31m\] ]# \[\e[0m\]'
+
 fi
 
 unset color_prompt
@@ -621,6 +696,7 @@ fi
 alias ll='ls -alF'
 alias la='ls -A'
 alias l='ls -CF'
+alias lsa='ls -al'
 
 # Alias definitions.
 # You may want to put all your additions into a separate file like
@@ -629,6 +705,21 @@ alias l='ls -CF'
 
 if [ -f ~/.bash_aliases ]; then
     . ~/.bash_aliases
+fi
+
+function _update_ps1() {
+    PS1="$(/usr/bin/powerline-go -hostname-only-if-ssh -error $? -jobs $(jobs -p | wc -l))"
+
+    # Uncomment the following line to automatically clear errors after showing
+    # them once. This not only clears the error for powerline-go, but also for
+    # everything else you run in that shell. Don't enable this if you're not
+    # sure this is what you want.
+
+    #set "?"
+}
+
+if [ "$TERM" != "linux" ] && [ -f "/usr/bin/powerline-go" ]; then
+    PROMPT_COMMAND="_update_ps1; $PROMPT_COMMAND"
 fi
 ::::<bashrc
 
@@ -669,11 +760,13 @@ reset=$(tput sgr0)
 
 prepare vmware photon os image v1 v2
 usage:
-  install.cmd <wslImage> <wslLocation> [version=1|2] [rootfs=4[.0|1|2]|5[.0]] [docker=0|1|x.x.x] [mosh=0|1|x.x.x]
+  install.cmd <wslImage> <wslLocation> [version=1|2] [rootfs=4[.0|1|2]|5[.0]] [docker=0|1|x.x.x] [mosh=0|1|x.x.x] [tmux=0|1] [powerline=0|1]
   <wslImage> - name of WSL image
   <wslLocation> - folder to host WSL image folder
   version - WSL version (default 1)
   rootfs - photon os version (default 4 latest)
   docker - install docker (default 24.0.7)
   mosh - install mosh (default 1.3.2)
+  tmux - install tmux (default with mosh)
+  powerline - install powerline-go (default 1.24)
 ::::<usage
