@@ -5,7 +5,7 @@ setlocal enabledelayedexpansion
 
 cd "%~dp0"
 
-set "wslImage=mosh8"
+set "wslImage=mosh"
 set "addr=%1"
 
 if "%1"=="" set /p addr="Enter address: " 
